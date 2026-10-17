@@ -63,8 +63,8 @@ export const DigitalCanvas: React.FC<DigitalCanvasProps> = ({
 
   // Sync stroke data for the active character
   useEffect(() => {
-    const char = charOrText.trim().charAt(0) || 'a';
-    const strokes = getStrokesForCharacter(char);
+    const char = (Array.from(charOrText.trim().normalize('NFC'))[0] as string) || '';
+    const strokes = char ? getStrokesForCharacter(char) : [];
     if (strokes.length > 0 && strokes[0].d) {
       deviationDetectorRef.current.setActiveStroke(strokes[0].d);
     }

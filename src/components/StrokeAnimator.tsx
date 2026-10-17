@@ -26,55 +26,89 @@ export const StrokeAnimator: React.FC<StrokeAnimatorProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(autoPlay);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const timerRef = useRef<number | null>(null);
+  const stepRef = useRef<number>(strokes.length);
 
   useEffect(() => {
     setCurrentStep(strokes.length);
+    stepRef.current = strokes.length;
   }, [strokes]);
 
   useEffect(() => {
-    if (isPlaying) {
-      if (currentStep >= strokes.length) {
-        setCurrentStep(1);
-        if (soundEnabled) playStrokeSound(1);
-      }
-
-      timerRef.current = window.setInterval(() => {
-        setCurrentStep((prev) => {
-          if (prev >= strokes.length) {
-            setIsPlaying(false);
-            return strokes.length;
-          }
-          const next = prev + 1;
-          if (soundEnabled) playStrokeSound(next * 0.2 + 0.8);
-          return next;
-        });
-      }, 1000);
-    } else {
+    if (!isPlaying || strokes.length === 0) {
       if (timerRef.current) {
-        clearInterval(timerRef.current);
+        clearTimeout(timerRef.current);
         timerRef.current = null;
       }
+      return;
     }
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+    let isCancelled = false;
+
+    // Bắt đầu lại từ Nét 1 nếu đang ở cuối con chữ
+    if (stepRef.current >= strokes.length) {
+      stepRef.current = 1;
+      setCurrentStep(1);
+      if (soundEnabled) playStrokeSound(1);
+    }
+
+    const runSequentialStep = () => {
+      if (isCancelled) return;
+
+      const current = stepRef.current;
+      if (current >= strokes.length) {
+        // Đã hoàn thành tất cả các nét: dừng 1.5s để người học ngắm trọn vẹn con chữ
+        timerRef.current = window.setTimeout(() => {
+          if (!isCancelled) {
+            setIsPlaying(false);
+          }
+        }, 1500);
+        return;
+      }
+
+      // DỪNG ĐÚNG 0.5s (500ms) SAU KHI VẼ XONG MỖI NÉT RỒI MỚI VẼ NÉT TIẾP THEO
+      timerRef.current = window.setTimeout(() => {
+        if (isCancelled) return;
+
+        const nextStep = stepRef.current + 1;
+        stepRef.current = nextStep;
+        setCurrentStep(nextStep);
+        if (soundEnabled) playStrokeSound(nextStep * 0.2 + 0.8);
+
+        // Tiếp tục vòng lặp cho các nét kế tiếp
+        runSequentialStep();
+      }, 500);
     };
-  }, [isPlaying, strokes.length, currentStep, soundEnabled]);
+
+    runSequentialStep();
+
+    return () => {
+      isCancelled = true;
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [isPlaying, strokes.length, soundEnabled]);
 
   const handlePrev = () => {
     setIsPlaying(false);
-    setCurrentStep((prev) => Math.max(1, prev - 1));
+    const prev = Math.max(1, currentStep - 1);
+    stepRef.current = prev;
+    setCurrentStep(prev);
     if (soundEnabled) playStrokeSound(0.9);
   };
 
   const handleNext = () => {
     setIsPlaying(false);
-    setCurrentStep((prev) => Math.min(strokes.length, prev + 1));
+    const next = Math.min(strokes.length, currentStep + 1);
+    stepRef.current = next;
+    setCurrentStep(next);
     if (soundEnabled) playStrokeSound(1.2);
   };
 
   const handleReset = () => {
     setIsPlaying(false);
+    stepRef.current = 1;
     setCurrentStep(1);
     if (soundEnabled) playStrokeSound(1);
   };

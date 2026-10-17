@@ -103,7 +103,13 @@ QUY TẮC BẮT BUỘC VỀ PHÁT HIỆN MỰC THỰC TẾ (REAL INK CHECK):
 }
 - TUYỆT ĐỐI KHÔNG ĐƯỢC CHẤM ĐIỂM (Không chấm 90, 96 hay bất kỳ điểm nào) NẾU KHÔNG CÓ NÉT MỰC THẬT TRÊN GIẤY.
 
-Nếu có nét mực thật trên giấy:
+QUY TẮC BẮT BUỘC VỀ ĐỘ TƯƠNG ĐỒNG HÌNH DÁNG NỘI DUNG (SHAPE SIMILARITY CHECK):
+- NẾU NGƯỜI DÙNG VIẾT SAI CHỮ CÁI SO VỚI YÊU CẦU (Ví dụ: mẫu yêu cầu chữ 'a' nhưng viết chữ 'o', hoặc viết nét nguệch ngoạc không đúng cấu trúc chữ '${charTarget}'):
+  Độ tương đồng hình dáng < 40% -> ĐIỂM TỔNG TỐI ĐA BẮT BUỘC <= 28 ĐIỂM (overall_score <= 28, status: "FAIL").
+  TUYỆT ĐỐI KHÔNG ĐƯỢC CHO 70 ĐIỂM KHI VIẾT SAI CHỮ!
+  Bắt buộc ghi nhận xét instruction: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu".
+
+Nếu có nét mực thật trên giấy và viết đúng chữ mẫu:
 Chấm điểm công tâm theo 4 tiêu chí (thang 100 dựa trên độ chuẩn thực tế, không tâng bốc điểm cao nếu nét viết lệch hoặc nguệch ngoạc):
 - trajectory_score: Độ bám sát quỹ đạo nét mẫu.
 - start_end_accuracy: Độ chính xác điểm đặt và điểm dừng bút.
@@ -172,6 +178,36 @@ Trả về kết quả dưới định dạng JSON thuần (Strict JSON):
       });
     }
 
+    // BẢO VỆ CHỐNG ĐIỂM ẢO KHI VIẾT SAI CHỮ (SHAPE & CHARACTER SIMILARITY ENFORCEMENT):
+    // Nếu kết quả CV hoặc ảnh thực tế không khớp chữ mẫu, bóp điểm tổng tối đa < 30 điểm
+    const cvMetrics = req.body?.cv_metrics;
+    if (cvMetrics) {
+      const isShapeDefective = (cvMetrics.shapeSimilarity !== undefined && cvMetrics.shapeSimilarity < 40) || 
+                               cvMetrics.isShapeMatch === false || 
+                               cvMetrics.status === 'FAIL' || 
+                               (typeof cvMetrics.finalScore === 'number' && cvMetrics.finalScore <= 35);
+      if (isShapeDefective) {
+        if (!strictParsed.metrics) strictParsed.metrics = {};
+        strictParsed.metrics.overall_score = Math.min(28, typeof cvMetrics.finalScore === 'number' ? cvMetrics.finalScore : 25);
+        strictParsed.status = 'FAIL';
+        strictParsed.metrics.trajectory_score = Math.min(15, cvMetrics.trajectoryScore ?? 15);
+        strictParsed.metrics.start_end_accuracy = 20;
+        strictParsed.metrics.proportion_score = 5;
+        strictParsed.metrics.smoothness_score = 25;
+        strictParsed.detected_errors = [
+          {
+            error_type: "SAI_HINH_DANG_CHU",
+            severity: "HIGH",
+            instruction: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu",
+          }
+        ];
+        strictParsed.learning_path_recommendation = {
+          focus_area: "Đúng ký tự & hình dáng nét mẫu",
+          suggested_next_exercise: `Quan sát kỹ chữ mẫu '${charTarget}' màu hồng trên màn hình và đồ lại từng nét chậm rãi`,
+        };
+      }
+    }
+
     const legacyFeedback = buildLegacyFeedbackFromStrict(strictParsed, sampleText);
 
     return res.json({
@@ -223,6 +259,8 @@ function computeRealisticScoreFromMetrics(
     outOfBoundsPixels?: number;
     status?: 'PASS' | 'NEEDS_IMPROVEMENT' | 'FAIL';
     warningText?: string;
+    shapeSimilarity?: number;
+    isShapeMatch?: boolean;
   },
   sampleText?: string
 ) {
@@ -232,40 +270,62 @@ function computeRealisticScoreFromMetrics(
     : (typeof metrics.finalScore === 'number' ? metrics.finalScore : undefined);
 
   if (typeof suppliedScore === 'number') {
-    const overall = suppliedScore;
+    const isShapeDefective = (metrics.shapeSimilarity !== undefined && metrics.shapeSimilarity < 40) || 
+                             metrics.isShapeMatch === false || 
+                             metrics.status === 'FAIL' || 
+                             suppliedScore <= 35;
+
+    const overall = isShapeDefective ? Math.min(suppliedScore, 28) : suppliedScore;
     const trajectory = metrics.trajectoryScore ?? Math.round((metrics.precision || 0.8) * 50);
     const completeness = metrics.completenessScore ?? Math.round((metrics.recall || 0.8) * 30);
-    const proportion = metrics.proportionScore ?? 18;
+    const proportion = isShapeDefective ? 5 : (metrics.proportionScore ?? 18);
     const precisionVal = metrics.precision ?? (overall / 100);
-    const warning = metrics.warningText;
+    const warning = isShapeDefective 
+      ? (metrics.warningText || "⚠️ Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu!")
+      : metrics.warningText;
 
     let gradeText = "Khá tốt! Cần nắn nót thêm đường cong/độ cao";
-    if (overall >= 85) gradeText = "Xuất sắc! Nét chữ đúng chuẩn";
-    else if (overall < 65) gradeText = "Chưa đúng mẫu! Hãy xem lại hướng đi của nét";
+    if (isShapeDefective) {
+      gradeText = "Chưa đúng mẫu! Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu";
+    } else if (overall >= 85) {
+      gradeText = "Xuất sắc! Nét chữ đúng chuẩn";
+    } else if (overall < 65) {
+      gradeText = "Chưa đúng mẫu! Hãy xem lại hướng đi của nét";
+    }
 
     const strictEvaluation = {
       target_character: targetChar,
       stroke_index: strokeIndex,
-      status: metrics.status || (overall >= 85 ? ("PASS" as const) : (overall >= 65 ? ("NEEDS_IMPROVEMENT" as any) : ("FAIL" as const))),
+      status: isShapeDefective ? ("FAIL" as const) : (metrics.status || (overall >= 85 ? ("PASS" as const) : (overall >= 65 ? ("NEEDS_IMPROVEMENT" as any) : ("FAIL" as const)))),
       metrics: {
         overall_score: overall,
-        trajectory_score: trajectory,
-        start_end_accuracy: Math.max(30, Math.round(100 - (metrics.penalty || 0) * 1.5)),
+        trajectory_score: isShapeDefective ? Math.min(15, trajectory) : trajectory,
+        start_end_accuracy: isShapeDefective ? 20 : Math.max(30, Math.round(100 - (metrics.penalty || 0) * 1.5)),
         proportion_score: proportion,
-        smoothness_score: Math.max(30, Math.round(precisionVal * 95)),
+        smoothness_score: isShapeDefective ? 25 : Math.max(30, Math.round(precisionVal * 95)),
       },
-      detected_errors: warning ? [
+      detected_errors: isShapeDefective ? [
+        {
+          error_type: "SAI_HINH_DANG_CHU" as const,
+          severity: "HIGH" as const,
+          instruction: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu",
+        }
+      ] : (warning ? [
         {
           error_type: "LECH_NET_SAI_MAU" as const,
           severity: overall < 65 ? ("HIGH" as const) : ("LOW" as const),
           instruction: warning,
         }
-      ] : [],
+      ] : []),
       learning_path_recommendation: {
-        focus_area: overall < 65 ? "Quỹ đạo bám nét mẫu" : "Nét móc ngược & Độ nghiêng tự nhiên",
-        suggested_next_exercise: overall < 65
-          ? "Đồ lại theo nét chữ mẫu màu hồng để quen tay trước khi viết độc lập"
-          : "Luyện 3 dòng nét mẫu để tay quen với nhịp lia bút đều đặn",
+        focus_area: isShapeDefective 
+          ? "Đúng ký tự & hình dáng nét mẫu" 
+          : (overall < 65 ? "Quỹ đạo bám nét mẫu" : "Nét móc ngược & Độ nghiêng tự nhiên"),
+        suggested_next_exercise: isShapeDefective
+          ? `Quan sát kỹ chữ mẫu '${targetChar}' màu hồng trên màn hình và đồ lại từng nét chậm rãi`
+          : (overall < 65
+            ? "Đồ lại theo nét chữ mẫu màu hồng để quen tay trước khi viết độc lập"
+            : "Luyện 3 dòng nét mẫu để tay quen với nhịp lia bút đều đặn"),
       },
     };
 
@@ -282,27 +342,33 @@ function computeRealisticScoreFromMetrics(
         feedback: `Độ hoàn thiện con chữ đạt ${Math.round((metrics.recall || 0.7) * 100)}% diện tích nét mẫu.`,
       },
       spacingAndAlignment: {
-        score: Math.max(30, Math.round(100 - (metrics.penalty || 0) * 1.5)),
-        feedback: (metrics.penalty && metrics.penalty > 0)
-          ? `Phát hiện ${metrics.outOfBoundsPixels || 0} pixels mực lệch ngoài nét mẫu (phạt -${metrics.penalty} điểm).`
-          : "Nét chữ nằm ngay ngắn trong khung ô ly chuẩn.",
+        score: isShapeDefective ? 20 : Math.max(30, Math.round(100 - (metrics.penalty || 0) * 1.5)),
+        feedback: isShapeDefective
+          ? "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu."
+          : ((metrics.penalty && metrics.penalty > 0)
+            ? `Phát hiện ${metrics.outOfBoundsPixels || 0} pixels mực lệch ngoài nét mẫu (phạt -${metrics.penalty} điểm).`
+            : "Nét chữ nằm ngay ngắn trong khung ô ly chuẩn."),
       },
       strokeQuality: {
-        score: Math.max(30, Math.round(precisionVal * 95)),
-        feedback: `Nét chữ liền mạch, độ chính xác quỹ đạo đạt ${Math.round(precisionVal * 100)}%.`,
+        score: isShapeDefective ? 25 : Math.max(30, Math.round(precisionVal * 95)),
+        feedback: isShapeDefective
+          ? "Hình dáng nét chữ chưa đúng với chữ cái yêu cầu."
+          : `Nét chữ liền mạch, độ chính xác quỹ đạo đạt ${Math.round(precisionVal * 100)}%.`,
       },
-      strengths: overall >= 70 ? [
+      strengths: (!isShapeDefective && overall >= 70) ? [
         "Bé cầm bút chắc tay, nét viết rõ ràng bám sát nét mẫu.",
         "Nét chữ nằm gọn trong khung ô ly tiểu học.",
       ] : [
-        "Bé đã cố gắng viết bài, nét mực đậm rõ.",
+        "Bé đã cố gắng luyện viết, nét mực rõ ràng.",
       ],
-      improvements: warning ? [warning] : [
+      improvements: isShapeDefective ? [
+        "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu. Bé hãy nhìn kỹ chữ mẫu màu hồng nhé."
+      ] : (warning ? [warning] : [
         "Bé chú ý vuốt nhẹ nét kết thúc của chữ cho thanh thoát, dừng đúng đường kẻ ngang số 1 nhé.",
-      ],
-      encouragement: overall >= 70
+      ]),
+      encouragement: (!isShapeDefective && overall >= 70)
         ? "Rất đáng khen! Nét chữ của bé tiến bộ vượt bậc, tiếp tục rèn thêm chữ mới nhé!"
-        : "Không sao cả, bé hãy nhìn kỹ chữ mẫu màu hồng và đồ theo từng nét nhé!",
+        : "Không sao cả, bé hãy nhìn kỹ chữ mẫu màu hồng và đồ chậm rãi theo từng nét nhé!",
     };
 
     return { strictEvaluation, legacyFeedback };
@@ -362,11 +428,13 @@ function computeRealisticScoreFromMetrics(
 // Helper to convert strict CV evaluation to rich legacy UI view
 function buildLegacyFeedbackFromStrict(strict: any, sampleText?: string) {
   const overall = strict?.metrics?.overall_score || 85;
+  const isFail = strict?.status === 'FAIL' || overall < 40;
   let grade = "Khá - Nét chữ đều và sáng";
-  if (overall >= 90) grade = "Xuất sắc - Nét chữ chuẩn ô ly Tiểu học ⭐";
+  if (isFail) grade = "Chưa đúng mẫu! Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu";
+  else if (overall >= 90) grade = "Xuất sắc - Nét chữ chuẩn ô ly Tiểu học ⭐";
   else if (overall >= 80) grade = "Khá tốt - Nét chữ thanh thoát, đúng quy tắc";
   else if (overall >= 65) grade = "Trung bình - Cần nắn lại tỷ lệ ô ly";
-  else grade = "Cần rèn luyện thêm - Chú ý hướng nét";
+  else grade = "Chưa đúng mẫu! Hãy xem lại hướng đi của nét";
 
   const strengths: string[] = [];
   if ((strict?.metrics?.trajectory_score || 0) >= 80) {

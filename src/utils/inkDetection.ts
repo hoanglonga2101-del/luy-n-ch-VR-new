@@ -83,6 +83,8 @@ export interface StrokeEvaluationResult {
   penalty: number;
   precision: number;
   recall: number;
+  shapeSimilarity?: number; // 0 - 100 (%) Độ tương đồng hình dáng nội dung
+  isShapeMatch?: boolean;   // true nếu độ tương đồng >= 40%
   totalInkPoints: number;
   pointsInSafeZone: number;
   centerlineCoverage: number;
@@ -680,66 +682,332 @@ function extractTemplateCenterlinePoints(
 }
 
 /**
- * Lấy mẫu đều chữ mẫu thành đúng 100 điểm mốc (Waypoints) trải dài từ điểm đầu đến điểm cuối
+ * Lấy mẫu đều chữ mẫu thành đúng 100 điểm mốc (Waypoints) trải dài từ điểm đầu đến điểm cuối,
+ * bảo toàn chỉ số strokeId của từng nét thành phần để phân tích độ hoàn thiện cấu trúc.
  */
 export function sampleTemplateTo100Waypoints(
-  rawPoints: Array<{ x: number; y: number }>,
+  rawPoints: Array<{ x: number; y: number; strokeId?: number }>,
   targetCount: number = 100
-): Array<{ x: number; y: number; index: number }> {
+): Array<{ x: number; y: number; index: number; strokeId: number }> {
   if (!rawPoints || rawPoints.length === 0) return [];
   if (rawPoints.length === 1) {
     return Array.from({ length: targetCount }, (_, i) => ({
       x: rawPoints[0].x,
       y: rawPoints[0].y,
       index: i,
+      strokeId: rawPoints[0].strokeId || 1,
     }));
   }
 
-  // Tính độ dài cung tích lũy (Cumulative Arc Length)
-  const cumDist: number[] = [0];
-  let totalLength = 0;
-  for (let i = 1; i < rawPoints.length; i++) {
-    const dx = rawPoints[i].x - rawPoints[i - 1].x;
-    const dy = rawPoints[i].y - rawPoints[i - 1].y;
-    const dist = Math.hypot(dx, dy);
-    totalLength += dist;
-    cumDist.push(totalLength);
+  // Phân nhóm theo strokeId để chia đều điểm theo từng nét, tránh sinh nét nối ảo giữa 2 nét riêng biệt
+  const strokesMap = new Map<number, Array<{ x: number; y: number; strokeId?: number }>>();
+  for (const pt of rawPoints) {
+    const sId = pt.strokeId || 1;
+    let list = strokesMap.get(sId);
+    if (!list) {
+      list = [];
+      strokesMap.set(sId, list);
+    }
+    list.push(pt);
   }
 
-  if (totalLength < 1e-4) {
-    return Array.from({ length: targetCount }, (_, i) => ({
-      x: rawPoints[0].x,
-      y: rawPoints[0].y,
-      index: i,
-    }));
-  }
+  const distinctStrokes = Array.from(strokesMap.entries());
 
-  const waypoints: Array<{ x: number; y: number; index: number }> = [];
-  let segIdx = 0;
-
-  for (let i = 0; i < targetCount; i++) {
-    const targetDist = (i / (targetCount - 1)) * totalLength;
-
-    while (segIdx < cumDist.length - 2 && cumDist[segIdx + 1] < targetDist) {
-      segIdx++;
+  if (distinctStrokes.length <= 1) {
+    // Trường hợp 1 nét đơn
+    const cumDist: number[] = [0];
+    let totalLength = 0;
+    for (let i = 1; i < rawPoints.length; i++) {
+      const dist = Math.hypot(rawPoints[i].x - rawPoints[i - 1].x, rawPoints[i].y - rawPoints[i - 1].y);
+      totalLength += dist;
+      cumDist.push(totalLength);
     }
 
-    const segStartDist = cumDist[segIdx];
-    const segEndDist = cumDist[segIdx + 1];
-    const segLen = Math.max(1e-5, segEndDist - segStartDist);
-    const t = Math.max(0, Math.min(1, (targetDist - segStartDist) / segLen));
+    if (totalLength < 1e-4) {
+      return Array.from({ length: targetCount }, (_, i) => ({
+        x: rawPoints[0].x,
+        y: rawPoints[0].y,
+        index: i,
+        strokeId: rawPoints[0].strokeId || 1,
+      }));
+    }
 
-    const pA = rawPoints[segIdx];
-    const pB = rawPoints[segIdx + 1];
+    const waypoints: Array<{ x: number; y: number; index: number; strokeId: number }> = [];
+    let segIdx = 0;
 
-    waypoints.push({
-      x: pA.x + t * (pB.x - pA.x),
-      y: pA.y + t * (pB.y - pA.y),
-      index: i,
-    });
+    for (let i = 0; i < targetCount; i++) {
+      const targetDist = (i / (targetCount - 1)) * totalLength;
+      while (segIdx < cumDist.length - 2 && cumDist[segIdx + 1] < targetDist) {
+        segIdx++;
+      }
+      const segStartDist = cumDist[segIdx];
+      const segEndDist = cumDist[segIdx + 1];
+      const segLen = Math.max(1e-5, segEndDist - segStartDist);
+      const t = Math.max(0, Math.min(1, (targetDist - segStartDist) / segLen));
+      const pA = rawPoints[segIdx];
+      const pB = rawPoints[segIdx + 1];
+
+      waypoints.push({
+        x: pA.x + t * (pB.x - pA.x),
+        y: pA.y + t * (pB.y - pA.y),
+        index: i,
+        strokeId: pA.strokeId || 1,
+      });
+    }
+
+    return waypoints;
   }
 
-  return waypoints;
+  // Trường hợp nhiều nét: phân bổ 100 điểm mốc theo tỷ lệ độ dài từng nét
+  const strokeLengths: number[] = [];
+  let totalAllStrokesLength = 0;
+
+  for (const [, pts] of distinctStrokes) {
+    let sLen = 0;
+    for (let i = 1; i < pts.length; i++) {
+      sLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    }
+    sLen = Math.max(5, sLen);
+    strokeLengths.push(sLen);
+    totalAllStrokesLength += sLen;
+  }
+
+  const allWaypoints: Array<{ x: number; y: number; index: number; strokeId: number }> = [];
+  let currentGlobalIdx = 0;
+
+  for (let s = 0; s < distinctStrokes.length; s++) {
+    const [sId, pts] = distinctStrokes[s];
+    const sLen = strokeLengths[s];
+    // Phân bổ số waypoint tối thiểu 15 điểm cho mỗi nét để nhận dạng nét nhỏ (dấu trăng, nét gạch ngang...)
+    const countForStroke = s === distinctStrokes.length - 1
+      ? Math.max(15, targetCount - allWaypoints.length)
+      : Math.max(15, Math.round((sLen / totalAllStrokesLength) * targetCount));
+
+    const cumDist: number[] = [0];
+    let strokeAccum = 0;
+    for (let i = 1; i < pts.length; i++) {
+      strokeAccum += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      cumDist.push(strokeAccum);
+    }
+
+    let segIdx = 0;
+    for (let i = 0; i < countForStroke; i++) {
+      const targetDist = countForStroke > 1 ? (i / (countForStroke - 1)) * strokeAccum : 0;
+      while (segIdx < cumDist.length - 2 && cumDist[segIdx + 1] < targetDist) {
+        segIdx++;
+      }
+      const segStartDist = cumDist[segIdx];
+      const segEndDist = cumDist[segIdx + 1] || (segStartDist + 1);
+      const segLen = Math.max(1e-5, segEndDist - segStartDist);
+      const t = Math.max(0, Math.min(1, (targetDist - segStartDist) / segLen));
+      const pA = pts[segIdx] || pts[0];
+      const pB = pts[segIdx + 1] || pA;
+
+      allWaypoints.push({
+        x: pA.x + t * (pB.x - pA.x),
+        y: pA.y + t * (pB.y - pA.y),
+        index: currentGlobalIdx++,
+        strokeId: sId,
+      });
+    }
+  }
+
+  return allWaypoints.slice(0, targetCount);
+}
+
+/**
+ * THUẬT TOÁN ĐỐI SOÁT ĐỘ TƯƠNG ĐỒNG HÌNH DÁNG NỘI DUNG (Shape & Character Similarity Check)
+ * Phục vụ loại bỏ triệt để điểm ảo 70/100 khi người dùng viết sai chữ hoặc sai cấu trúc nét:
+ * 
+ * 1. Ma trận chiếm dụng không gian nhị phân (Binary Spatial Occupancy Grid 28x28):
+ *    - Tính chỉ số tương đồng đường bao IoU = (Intersection / Union).
+ * 2. Khoảng cách Chamfer Distance 2 chiều (Bidirectional Chamfer Distance):
+ *    - Đo trung bình khoảng cách hình học từ nét mực người dùng đến mẫu và ngược lại.
+ * 3. Kiểm tra độ hoàn thiện từng nét cấu trúc (Per-Stroke Integrity Check):
+ *    - Đối với chữ nhiều nét (ví dụ: 'a' gồm nét cong kín + nét móc ngược; 'p' gồm nét sổ + nét móc):
+ *      Nếu người dùng chỉ vẽ 1 hình tròn 'o' thay cho chữ 'a', nét móc ngược có độ phủ = 0%.
+ *      Khi đó, cấu trúc nét chữ bị khiếm khuyết nghiêm trọng!
+ * 4. Ngưỡng chặn bắt buộc:
+ *    - Nếu Độ tương đồng hình dáng < 40%:
+ *      => Điểm tổng tối đa BẮT BUỘC <= 28 - 32 điểm (Đánh rớt / FAIL).
+ *      => TUYỆT ĐỐI KHÔNG ĐƯỢC CHO 70 ĐIỂM!
+ *      => Nhận xét rõ: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu".
+ */
+export function computeShapeAndCharacterSimilarity(
+  alignedUserPoints: Array<{ x: number; y: number }>,
+  waypoints100: Array<{ x: number; y: number; index: number; strokeId?: number }>,
+  width: number,
+  height: number,
+  toleranceR: number
+): {
+  similarity: number;          // 0 - 100 (%)
+  iou: number;                 // 0.0 - 1.0
+  chamferSim: number;          // 0.0 - 1.0
+  minStrokeCoverage: number;   // 0.0 - 1.0
+  strokeCoverages: number[];
+  isMatch: boolean;            // true if similarity >= 40%
+  failureReason?: string;
+} {
+  if (!alignedUserPoints || alignedUserPoints.length === 0 || !waypoints100 || waypoints100.length === 0) {
+    return {
+      similarity: 0,
+      iou: 0,
+      chamferSim: 0,
+      minStrokeCoverage: 0,
+      strokeCoverages: [],
+      isMatch: false,
+      failureReason: "Không có nét vẽ để so khớp hình dáng",
+    };
+  }
+
+  // 1. Phân nhóm Waypoints theo từng Stroke và tính độ phủ (Coverage) riêng từng nét
+  const strokeMap = new Map<number, Array<{ x: number; y: number }>>();
+  for (const wp of waypoints100) {
+    const sId = wp.strokeId || 1;
+    let arr = strokeMap.get(sId);
+    if (!arr) {
+      arr = [];
+      strokeMap.set(sId, arr);
+    }
+    arr.push(wp);
+  }
+
+  const strokeCoverages: number[] = [];
+  const rSq = toleranceR * toleranceR;
+
+  strokeMap.forEach((pts) => {
+    let hitCount = 0;
+    for (const wp of pts) {
+      let isHit = false;
+      for (let i = 0; i < alignedUserPoints.length; i += 2) {
+        const up = alignedUserPoints[i];
+        const dx = wp.x - up.x;
+        const dy = wp.y - up.y;
+        if (dx * dx + dy * dy <= rSq) {
+          isHit = true;
+          break;
+        }
+      }
+      if (isHit) hitCount++;
+    }
+    const cov = pts.length > 0 ? (hitCount / pts.length) : 0;
+    strokeCoverages.push(cov);
+  });
+
+  const numStrokes = strokeCoverages.length;
+  const minStrokeCoverage = numStrokes > 0 ? Math.min(...strokeCoverages) : 0;
+
+  // 2. Ma trận chiếm dụng không gian nhị phân 28x28 (Binary Spatial Occupancy Grid)
+  const GRID_SIZE = 28;
+  const userGrid = new Uint8Array(GRID_SIZE * GRID_SIZE);
+  const tmplGrid = new Uint8Array(GRID_SIZE * GRID_SIZE);
+
+  // Điền template vào grid (kèm vùng đệm lân cận bán kính 1 cell)
+  for (const wp of waypoints100) {
+    const gx = Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((wp.x / width) * GRID_SIZE)));
+    const gy = Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((wp.y / height) * GRID_SIZE)));
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = gx + dx;
+        const ny = gy + dy;
+        if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
+          tmplGrid[ny * GRID_SIZE + nx] = 1;
+        }
+      }
+    }
+  }
+
+  // Điền user ink vào grid
+  for (const up of alignedUserPoints) {
+    const gx = Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((up.x / width) * GRID_SIZE)));
+    const gy = Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((up.y / height) * GRID_SIZE)));
+    userGrid[gy * GRID_SIZE + gx] = 1;
+  }
+
+  // Tính IoU giữa User Grid và Template Grid
+  let intersectionCount = 0;
+  let unionCount = 0;
+  const totalCells = GRID_SIZE * GRID_SIZE;
+  for (let i = 0; i < totalCells; i++) {
+    const u = userGrid[i];
+    const t = tmplGrid[i];
+    if (u === 1 && t === 1) intersectionCount++;
+    if (u === 1 || t === 1) unionCount++;
+  }
+  const iou = unionCount > 0 ? (intersectionCount / unionCount) : 0;
+
+  // 3. Khoảng cách Chamfer 2 chiều (Bidirectional Chamfer Distance)
+  // Lấy mẫu con tối đa 50 điểm để tính nhanh trong 0.2ms
+  const userStep = Math.max(1, Math.floor(alignedUserPoints.length / 50));
+  const userSamples: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < alignedUserPoints.length; i += userStep) {
+    userSamples.push(alignedUserPoints[i]);
+  }
+
+  const tmplStep = Math.max(1, Math.floor(waypoints100.length / 50));
+  const tmplSamples: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < waypoints100.length; i += tmplStep) {
+    tmplSamples.push(waypoints100[i]);
+  }
+
+  let sumDistUserToTmpl = 0;
+  for (const up of userSamples) {
+    let minDist = Infinity;
+    for (const tp of tmplSamples) {
+      const d = Math.hypot(up.x - tp.x, up.y - tp.y);
+      if (d < minDist) minDist = d;
+    }
+    sumDistUserToTmpl += minDist;
+  }
+  const avgDistUserToTmpl = userSamples.length > 0 ? (sumDistUserToTmpl / userSamples.length) : 50;
+
+  let sumDistTmplToUser = 0;
+  for (const tp of tmplSamples) {
+    let minDist = Infinity;
+    for (const up of userSamples) {
+      const d = Math.hypot(tp.x - up.x, tp.y - up.y);
+      if (d < minDist) minDist = d;
+    }
+    sumDistTmplToUser += minDist;
+  }
+  const avgDistTmplToUser = tmplSamples.length > 0 ? (sumDistTmplToUser / tmplSamples.length) : 50;
+
+  const meanChamferDist = (avgDistUserToTmpl + avgDistTmplToUser) / 2;
+  const chamferSim = Math.max(0, Math.min(1, 1 - meanChamferDist / 38));
+
+  // 4. Tổng hợp độ tương đồng hình dáng nội dung (0 - 100%)
+  // Tỷ trọng: 40% IoU ma trận không gian, 35% khoảng cách Chamfer, 25% độ bám nét cấu trúc
+  const strokeScore = numStrokes > 1 ? minStrokeCoverage : (intersectionCount / Math.max(1, unionCount));
+  let rawSimilarity = 0.40 * iou + 0.35 * chamferSim + 0.25 * strokeScore;
+  let similarity = Math.round(rawSimilarity * 100);
+
+  // ANTI-WRONG-CHARACTER GUARDS:
+  // Trường hợp 1: Chữ nhiều nét nhưng thiếu hẳn một nét chính (ví dụ: mẫu chữ 'a' nhưng chỉ viết hình tròn 'o')
+  // Nét móc ngược có minStrokeCoverage < 20% => BẮT BUỘC bóp điểm tương đồng xuống dưới 30%!
+  if (numStrokes > 1 && minStrokeCoverage < 0.20) {
+    similarity = Math.min(similarity, 28);
+  }
+
+  // Trường hợp 2: Viết chữ khác hẳn (ví dụ: mẫu 'a' nhưng vẽ chữ 'z', 'm' hoặc nguệch ngoạc)
+  // IoU thấp (< 0.22) hoặc khoảng cách Chamfer xa (> 25px)
+  if (iou < 0.22 || chamferSim < 0.30) {
+    similarity = Math.min(similarity, 26);
+  }
+
+  const isMatch = similarity >= 40;
+  const failureReason = isMatch 
+    ? undefined 
+    : "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu";
+
+  return {
+    similarity,
+    iou,
+    chamferSim,
+    minStrokeCoverage,
+    strokeCoverages,
+    isMatch,
+    failureReason,
+  };
 }
 
 export const MIN_INK_THRESHOLD = 50; // Ngưỡng tối thiểu số pixel nét vẽ thực tế
@@ -824,6 +1092,8 @@ function createZeroInkResult(detectedPixels: number = 0): StrokeEvaluationResult
     penalty: 0,
     precision: 0,
     recall: 0,
+    shapeSimilarity: 0,
+    isShapeMatch: false,
     totalInkPoints: detectedPixels,
     pointsInSafeZone: 0,
     centerlineCoverage: 0,
@@ -1052,18 +1322,32 @@ export function evaluateHandwriting(
     penalty = Math.min(25, Math.round((outOfBoundsRatio - 0.15) * 35));
   }
 
-  // Điểm tổng hợp cuối cùng
-  const finalScore = Math.max(0, Math.min(100, Math.round(baseScore - penalty)));
+  // 4. TIÊU CHÍ BẮT BUỘC: ĐỘ TƯƠNG ĐỒNG HÌNH DÁNG NỘI DUNG (Shape & Character Similarity Check)
+  const shapeCheck = computeShapeAndCharacterSimilarity(
+    alignedUserPoints,
+    waypoints100,
+    width,
+    height,
+    toleranceR
+  );
 
-  // BẢNG PHÂN LOẠI KẾT QUẢ RÕ RÀNG:
-  // - Từ 85 - 100 điểm: "Xuất sắc! Nét chữ đúng chuẩn".
-  // - Từ 65 - 84 điểm: "Khá tốt! Cần nắn nót thêm đường cong/độ cao".
-  // - Dưới 65 điểm: "Chưa đúng mẫu! Hãy xem lại hướng đi của nét".
+  let finalScore = Math.max(0, Math.min(100, Math.round(baseScore - penalty)));
+
+  // BẢNG PHÂN LOẠI KẾT QUẢ VÀ BẢO VỆ CHỐNG ĐIỂM ẢO KHI VIẾT SAI CHỮ:
   let grade = "";
   let status: 'PASS' | 'NEEDS_IMPROVEMENT' | 'FAIL' = 'PASS';
   let warningText: string | undefined = undefined;
 
-  if (finalScore >= 85) {
+  // QUY TẮC BẮT BUỘC THEO ĐẶC TẢ SƯ PHẠM:
+  // Nếu người dùng viết sai chữ cái (ví dụ: mẫu yêu cầu chữ 'a' nhưng viết chữ 'o' hoặc viết nguệch ngoạc hình tròn):
+  // Độ tương đồng hình dáng < 40% -> ĐIỂM TỔNG TỐI ĐA CHỈ ĐƯỢC < 30 - 35 điểm (Đánh rớt / FAIL),
+  // TUYỆT ĐỐI KHÔNG ĐƯỢC CHO 70 ĐIỂM!
+  if (!shapeCheck.isMatch || shapeCheck.similarity < 40) {
+    finalScore = Math.min(28, Math.max(10, Math.round(shapeCheck.similarity * 0.7)));
+    status = 'FAIL';
+    grade = "Chưa đúng mẫu! Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu";
+    warningText = "⚠️ Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu! Vui lòng nhìn kỹ nét chữ mẫu màu hồng để đồ đúng con chữ nhé.";
+  } else if (finalScore >= 85) {
     grade = "Xuất sắc! Nét chữ đúng chuẩn";
     status = 'PASS';
   } else if (finalScore >= 65) {
@@ -1077,9 +1361,13 @@ export function evaluateHandwriting(
   }
 
   // Các điểm thành phần trực quan
-  const trajectoryScore = Math.round((hitCount / 100) * 50);
-  const completenessScore = Math.round((hitCount / 100) * 30);
-  const proportionScore = Math.max(0, 20 - penalty);
+  const trajectoryScore = shapeCheck.similarity < 40
+    ? Math.min(15, Math.round(shapeCheck.similarity * 0.35))
+    : Math.round((hitCount / 100) * 50);
+  const completenessScore = shapeCheck.similarity < 40
+    ? Math.min(10, Math.round(shapeCheck.minStrokeCoverage * 25))
+    : Math.round((hitCount / 100) * 30);
+  const proportionScore = shapeCheck.similarity < 40 ? 5 : Math.max(0, 20 - penalty);
   const inTemplatePixels = alignedUserPoints.length - outOfBoundsCount;
 
   // Tạo Debug Overlay Canvas trực quan
@@ -1140,6 +1428,8 @@ export function evaluateHandwriting(
     penalty,
     precision: alignedUserPoints.length > 0 ? (inTemplatePixels / alignedUserPoints.length) : 0,
     recall: hitCount / 100,
+    shapeSimilarity: shapeCheck.similarity,
+    isShapeMatch: shapeCheck.isMatch,
     totalInkPoints,
     pointsInSafeZone: inTemplatePixels,
     centerlineCoverage: hitCount / 100,

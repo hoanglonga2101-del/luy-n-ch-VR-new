@@ -137,15 +137,40 @@ export const HandwritingAIReview: React.FC<HandwritingAIReviewProps> = ({
             ? "Khá tốt! Cần nắn nót thêm đường cong/độ cao"
             : "Chưa đúng mẫu! Hãy xem lại hướng đi của nét"
         );
-        if (strokeEval.finalScore < 65) {
+        if (strokeEval.finalScore < 65 || (strokeEval.shapeSimilarity !== undefined && strokeEval.shapeSimilarity < 40)) {
           feedbackResult.improvements = [
-            strokeEval.warningText || "Chưa đúng mẫu! Hãy xem lại hướng đi của nét và đồ chậm lại theo nét mẫu nhé."
+            strokeEval.warningText || "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu."
           ];
           if (feedbackResult.slantAnalysis) feedbackResult.slantAnalysis.score = strokeEval.trajectoryScore;
           if (feedbackResult.sizeConsistency) feedbackResult.sizeConsistency.score = strokeEval.completenessScore;
           if (feedbackResult.strictEvaluation?.metrics) {
             feedbackResult.strictEvaluation.metrics.overall_score = feedbackResult.overallScore;
             feedbackResult.strictEvaluation.metrics.start_end_accuracy = Math.round(strokeEval.precision * 50);
+          }
+          if (strokeEval.shapeSimilarity !== undefined && strokeEval.shapeSimilarity < 40) {
+            feedbackResult.strictEvaluation = {
+              target_character: targetChar,
+              stroke_index: strokeIndex,
+              status: 'FAIL',
+              metrics: {
+                overall_score: strokeEval.finalScore,
+                trajectory_score: strokeEval.trajectoryScore,
+                start_end_accuracy: 20,
+                proportion_score: strokeEval.proportionScore,
+                smoothness_score: 25,
+              },
+              detected_errors: [
+                {
+                  error_type: "SAI_HINH_DANG_CHU",
+                  severity: "HIGH",
+                  instruction: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu",
+                }
+              ],
+              learning_path_recommendation: {
+                focus_area: "Đúng ký tự & hình dáng nét mẫu",
+                suggested_next_exercise: `Quan sát kỹ chữ mẫu '${targetChar}' màu hồng trên màn hình và đồ lại từng nét chậm rãi`,
+              },
+            };
           }
         }
       } else {
@@ -160,7 +185,7 @@ export const HandwritingAIReview: React.FC<HandwritingAIReviewProps> = ({
         return;
       }
 
-      const isWrongSample = strokeEval.finalScore < 65;
+      const isWrongSample = strokeEval.finalScore < 65 || (strokeEval.shapeSimilarity !== undefined && strokeEval.shapeSimilarity < 40);
 
       const strictFallback = {
         target_character: targetChar,
@@ -169,11 +194,17 @@ export const HandwritingAIReview: React.FC<HandwritingAIReviewProps> = ({
         metrics: {
           overall_score: strokeEval.finalScore,
           trajectory_score: strokeEval.trajectoryScore,
-          start_end_accuracy: isWrongSample ? Math.max(20, Math.round(strokeEval.precision * 50)) : Math.max(65, Math.round(100 - strokeEval.penalty * 1.5)),
+          start_end_accuracy: isWrongSample ? Math.max(15, Math.round(strokeEval.precision * 40)) : Math.max(65, Math.round(100 - strokeEval.penalty * 1.5)),
           proportion_score: strokeEval.completenessScore,
-          smoothness_score: Math.max(40, Math.round(strokeEval.precision * 95)),
+          smoothness_score: isWrongSample ? 25 : Math.max(40, Math.round(strokeEval.precision * 95)),
         },
-        detected_errors: strokeEval.warningText ? [
+        detected_errors: (strokeEval.shapeSimilarity !== undefined && strokeEval.shapeSimilarity < 40) ? [
+          {
+            error_type: "SAI_HINH_DANG_CHU" as const,
+            severity: "HIGH" as const,
+            instruction: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu",
+          }
+        ] : (strokeEval.warningText ? [
           {
             error_type: "LECH_NET_SAI_MAU" as const,
             severity: isWrongSample ? ("HIGH" as const) : ("LOW" as const),
@@ -185,11 +216,11 @@ export const HandwritingAIReview: React.FC<HandwritingAIReviewProps> = ({
             severity: "LOW" as const,
             instruction: "Bé chú ý vuốt nhẹ nét kết thúc của chữ cho thanh thoát, dừng đúng đường kẻ ngang số 1 nhé.",
           }
-        ],
+        ]),
         learning_path_recommendation: {
-          focus_area: strokeEval.finalScore < 65 ? "Quỹ đạo bám nét mẫu" : "Nét móc ngược & Độ nghiêng tự nhiên",
-          suggested_next_exercise: strokeEval.finalScore < 65
-            ? "Đồ theo nét chữ mẫu màu hồng để quen tay trước khi viết độc lập"
+          focus_area: isWrongSample ? "Đúng ký tự & hình dáng nét mẫu" : "Nét móc ngược & Độ nghiêng tự nhiên",
+          suggested_next_exercise: isWrongSample
+            ? `Quan sát kỹ chữ mẫu '${targetChar}' màu hồng trên màn hình và đồ lại từng nét chậm rãi`
             : "Luyện 3 dòng chữ mẫu giữ khoảng cách chuẩn bằng 1 thân chữ 'o'",
         },
       };

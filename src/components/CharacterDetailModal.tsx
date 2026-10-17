@@ -1,8 +1,10 @@
 import React from 'react';
-import { X, Volume2, Sparkles, PenTool, BookOpen, Lightbulb } from 'lucide-react';
+import { X, Volume2, Sparkles, PenTool, BookOpen, Lightbulb, Headphones } from 'lucide-react';
 import { CharacterItem } from '../types';
 import { StrokeAnimator } from './StrokeAnimator';
 import { speakText } from '../utils/audio';
+import { getStrokesForCharacter } from '../data/strokeData';
+import { getLetterData } from '../data/vietnameseAlphabetData';
 
 interface CharacterDetailModalProps {
   character: CharacterItem | null;
@@ -22,24 +24,45 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
   const hasVariants = Boolean(character.upperChar && character.lowerChar);
   const [variant, setVariant] = React.useState<'upper' | 'lower'>('lower');
 
-  // Active letter data depending on selected variant
-  const activeChar = hasVariants
+  // Look up Vietnamese pedagogical dataset if applicable
+  const viData = getLetterData(character.lowerChar || character.char);
+
+  // Active letter data depending on selected variant with NFC normalization
+  const rawChar = hasVariants
     ? (variant === 'upper' ? character.upperChar! : character.lowerChar!)
     : character.char;
+  const activeChar = (rawChar || character.lowerChar || character.char || '').normalize('NFC');
 
-  const activeStrokes = hasVariants
-    ? (variant === 'upper' ? character.upperStrokes || character.strokes : character.lowerStrokes || character.strokes)
-    : character.strokes;
+  // Robust stroke extraction for current variant
+  const activeStrokes = (
+    viData 
+      ? (variant === 'upper' ? viData.upperStrokes : viData.lowerStrokes)
+      : (hasVariants
+          ? (variant === 'upper' 
+              ? (character.upperStrokes && character.upperStrokes.length > 0 ? character.upperStrokes : getStrokesForCharacter(activeChar))
+              : (character.lowerStrokes && character.lowerStrokes.length > 0 ? character.lowerStrokes : getStrokesForCharacter(activeChar)))
+          : (character.strokes && character.strokes.length > 0 ? character.strokes : getStrokesForCharacter(activeChar)))
+  );
 
-  const activeStrokesCount = hasVariants
-    ? (variant === 'upper' ? (character.upperStrokesCount || character.strokesCount) : (character.lowerStrokesCount || character.strokesCount))
-    : character.strokesCount;
+  const activeStrokesCount = (
+    activeStrokes && activeStrokes.length > 0
+      ? activeStrokes.length
+      : (hasVariants
+          ? (variant === 'upper' ? (character.upperStrokesCount || 2) : (character.lowerStrokesCount || 2))
+          : (character.strokesCount || 2))
+  );
+
+  const currentTips = (variant === 'upper' && viData?.upperTips) ? viData.upperTips : (viData?.tips || character.tips);
+  const currentExamples = viData?.examples || character.examples;
+  const currentAudioInstruction = (variant === 'upper' && viData?.upperAudioInstruction) ? viData.upperAudioInstruction : (viData?.audioInstruction || character.audioInstruction);
 
   const activeItemToLaunch: CharacterItem = {
     ...character,
     char: activeChar,
     strokes: activeStrokes,
     strokesCount: activeStrokesCount,
+    tips: currentTips,
+    examples: currentExamples,
   };
 
   return (
@@ -132,21 +155,31 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
 
         {/* Tips / Stroke Order Principles */}
         <div className="space-y-3 mb-6">
+          {currentAudioInstruction && (
+            <div className="p-3.5 sm:p-4 bg-cyan-950/40 border-2 border-cyan-500/35 rounded-2xl text-xs sm:text-sm text-cyan-100 flex items-start gap-3">
+              <Headphones className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-cyan-300 font-bold block mb-1">Quy tắc thứ tự từng nét:</strong>
+                <p className="leading-relaxed font-medium">{currentAudioInstruction}</p>
+              </div>
+            </div>
+          )}
+
           <div className="p-3.5 sm:p-4 bg-amber-500/15 border-2 border-amber-500/35 rounded-2xl text-xs sm:text-sm text-amber-100 flex items-start gap-3">
             <Lightbulb className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <strong className="text-amber-300 font-bold block mb-1">Mẹo đặt bút & lia nét cho bé:</strong>
-              <p className="leading-relaxed">{character.tips}</p>
+              <p className="leading-relaxed">{currentTips}</p>
             </div>
           </div>
 
-          {character.examples && character.examples.length > 0 && (
+          {currentExamples && currentExamples.length > 0 && (
             <div className="p-3.5 bg-neutral-850 border border-neutral-700/80 rounded-2xl text-xs sm:text-sm">
               <div className="text-neutral-300 mb-2 font-bold flex items-center gap-2">
                 <BookOpen className="w-4 h-4 text-cyan-400" /> Từ ngữ ví dụ:
               </div>
               <div className="flex flex-wrap gap-2">
-                {character.examples.map((ex, idx) => (
+                {currentExamples.map((ex, idx) => (
                   <span
                     key={idx}
                     className="px-3 py-1 bg-neutral-900 rounded-xl text-neutral-200 border border-neutral-700 font-semibold"
@@ -162,7 +195,8 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
         {/* Primary Action Buttons */}
         <div className="flex flex-col gap-2.5">
           <button
-            id="modal-launch-ar-btn"
+            id="btn-ar-view"
+            data-testid="modal-launch-ar-btn"
             onClick={() => onLaunchAR(activeItemToLaunch)}
             className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:brightness-110 text-neutral-950 font-black text-sm sm:text-base flex items-center justify-center gap-2 shadow-xl shadow-emerald-950/50 transition active:scale-95 cursor-pointer"
           >

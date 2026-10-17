@@ -122,10 +122,11 @@ export const ARViewfinder: React.FC<ARViewfinderProps> = ({
   }, [text]);
 
   const textLines: string[] = currentText.split('\n');
-  const characters: string[] = Array.from(currentText.replace(/\s+/g, ' '));
-  const activeChar: string = characters[0] || 'a';
-  const charStrokes: StrokePath[] = getStrokesForCharacter(activeChar);
-  const isSingleCharWithStrokes = textLines.length === 1 && currentText.trim().length === 1 && charStrokes.length > 0;
+  const normalizedText = currentText.trim().normalize('NFC');
+  const characters: string[] = Array.from(normalizedText);
+  const activeChar: string = characters[0] ? characters[0].normalize('NFC') : '';
+  const charStrokes: StrokePath[] = activeChar ? getStrokesForCharacter(activeChar) : [];
+  const isSingleCharWithStrokes = textLines.length === 1 && characters.length === 1 && charStrokes.length > 0;
 
   // 2. Camera Stream State
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -361,15 +362,40 @@ export const ARViewfinder: React.FC<ARViewfinderProps> = ({
             ? "Khá tốt! Cần nắn nót thêm đường cong/độ cao"
             : "Chưa đúng mẫu! Hãy xem lại hướng đi của nét"
         );
-        if (strokeEval.finalScore < 65) {
+        if (strokeEval.finalScore < 65 || (strokeEval.shapeSimilarity !== undefined && strokeEval.shapeSimilarity < 40)) {
           finalFeedback.improvements = [
-            strokeEval.warningText || "Chưa đúng mẫu! Hãy xem lại hướng đi của nét và quan sát nét mẫu màu hồng nhé."
+            strokeEval.warningText || "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu."
           ];
           if (finalFeedback.slantAnalysis) finalFeedback.slantAnalysis.score = strokeEval.trajectoryScore;
           if (finalFeedback.sizeConsistency) finalFeedback.sizeConsistency.score = strokeEval.completenessScore;
           if (finalFeedback.strictEvaluation?.metrics) {
             finalFeedback.strictEvaluation.metrics.overall_score = finalFeedback.overallScore;
             finalFeedback.strictEvaluation.metrics.start_end_accuracy = Math.round(strokeEval.precision * 50);
+          }
+          if (strokeEval.shapeSimilarity !== undefined && strokeEval.shapeSimilarity < 40) {
+            finalFeedback.strictEvaluation = {
+              target_character: activeChar,
+              stroke_index: 1,
+              status: 'FAIL',
+              metrics: {
+                overall_score: strokeEval.finalScore,
+                trajectory_score: strokeEval.trajectoryScore,
+                start_end_accuracy: 20,
+                proportion_score: strokeEval.proportionScore,
+                smoothness_score: 25,
+              },
+              detected_errors: [
+                {
+                  error_type: "SAI_HINH_DANG_CHU",
+                  severity: "HIGH",
+                  instruction: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu",
+                }
+              ],
+              learning_path_recommendation: {
+                focus_area: "Đúng ký tự & hình dáng nét mẫu",
+                suggested_next_exercise: `Quan sát kỹ chữ mẫu '${activeChar}' màu hồng trên màn hình và đồ lại từng nét chậm rãi`,
+              },
+            };
           }
         }
       } else {
@@ -384,9 +410,9 @@ export const ARViewfinder: React.FC<ARViewfinderProps> = ({
         return;
       }
 
-      const isWrongSample = strokeEval.finalScore < 65;
+      const isWrongSample = strokeEval.finalScore < 65 || (strokeEval.shapeSimilarity !== undefined && strokeEval.shapeSimilarity < 40);
       const actualStartEnd = isWrongSample
-        ? Math.max(20, Math.round(strokeEval.precision * 50))
+        ? Math.max(15, Math.round(strokeEval.precision * 40))
         : Math.max(65, Math.round(100 - strokeEval.penalty * 1.5));
 
       const strictFallback = {
@@ -398,15 +424,21 @@ export const ARViewfinder: React.FC<ARViewfinderProps> = ({
           trajectory_score: strokeEval.trajectoryScore,
           start_end_accuracy: actualStartEnd,
           proportion_score: strokeEval.proportionScore,
-          smoothness_score: Math.max(30, Math.round(strokeEval.precision * 95)),
+          smoothness_score: isWrongSample ? 25 : Math.max(30, Math.round(strokeEval.precision * 95)),
         },
-        detected_errors: strokeEval.warningText ? [
+        detected_errors: (strokeEval.shapeSimilarity !== undefined && strokeEval.shapeSimilarity < 40) ? [
+          {
+            error_type: "SAI_HINH_DANG_CHU" as const,
+            severity: "HIGH" as const,
+            instruction: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu",
+          }
+        ] : (strokeEval.warningText ? [
           {
             error_type: "LECH_NET_SAI_MAU" as const,
             severity: isWrongSample ? ("HIGH" as const) : ("LOW" as const),
             instruction: strokeEval.warningText,
           }
-        ] : [],
+        ] : []),
         learning_path_recommendation: {
           focus_area: isWrongSample ? "Quan sát hình dáng chữ mẫu" : "Nét móc ngược & Độ nghiêng tự nhiên",
           suggested_next_exercise: isWrongSample
@@ -673,8 +705,8 @@ export const ARViewfinder: React.FC<ARViewfinderProps> = ({
         </div>
       </div>
 
-      {/* 3. NÚT "THOÁT / ĐỔI CHỮ" NHỎ GỌN Ở GÓC TRÊN BÊN TRÁI (Component 2) */}
-      <div className="absolute top-4 left-4 z-30">
+      {/* 3. NÚT "THOÁT / ĐỔI CHỮ" VÀ NÚT CHUYỂN CHỮ HOA / THƯỜNG Ở GÓC TRÊN BÊN TRÁI */}
+      <div className="absolute top-4 left-4 z-30 flex items-center gap-2">
         <div className="relative">
           <button
             id="ar-exit-change-btn"
@@ -727,6 +759,34 @@ export const ARViewfinder: React.FC<ARViewfinderProps> = ({
             </div>
           )}
         </div>
+
+        {/* Quick Toggle Case (Hoa ⇄ Thường) when practicing a single Latin/Vietnamese letter */}
+        {characters.length === 1 && activeChar && (activeChar.toLowerCase() !== activeChar.toUpperCase()) && (
+          <button
+            id="ar-toggle-case-btn"
+            onClick={() => {
+              const isUpper = activeChar === activeChar.toUpperCase();
+              const nextChar = isUpper ? activeChar.toLowerCase() : activeChar.toUpperCase();
+              handleApplyNewText(nextChar);
+            }}
+            className="px-3 py-2 rounded-2xl bg-neutral-900/90 hover:bg-neutral-800 text-cyan-300 hover:text-white border border-neutral-700/80 backdrop-blur-md shadow-xl flex items-center gap-1.5 text-xs font-bold active:scale-95 transition cursor-pointer"
+            title="Chuyển đổi nhanh Chữ Thường ⇄ Chữ In Hoa"
+          >
+            <span className="font-mono text-[11px] bg-cyan-950/80 text-cyan-400 px-1 rounded border border-cyan-800/50">
+              Aa
+            </span>
+            <span className="hidden sm:inline">
+              {activeChar === activeChar.toUpperCase()
+                ? `Đổi sang Thường (${activeChar.toLowerCase()})`
+                : `Đổi sang Hoa (${activeChar.toUpperCase()})`}
+            </span>
+            <span className="sm:hidden">
+              {activeChar === activeChar.toUpperCase()
+                ? `Hoa → ${activeChar.toLowerCase()}`
+                : `Thường → ${activeChar.toUpperCase()}`}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* 4. NÚT CÀI ĐẶT (ICON BÁNH RĂNG ⚙️) Ở GÓC TRÊN BÊN PHẢI (Menu Cài Đặt Popover) */}

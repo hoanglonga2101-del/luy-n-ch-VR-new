@@ -1,14 +1,31 @@
 import { CharacterItem, LanguageCode } from '../types';
 import { CHARACTER_STROKE_DATA } from './strokeData';
+import { 
+  VIETNAMESE_29_LETTERS, 
+  VIETNAMESE_ALPHABET_DICT, 
+  vietnameseAlphabet, 
+  vietnameseAlphabetData, 
+  getLetterData 
+} from './vietnameseAlphabetData';
+
+export { 
+  VIETNAMESE_29_LETTERS, 
+  VIETNAMESE_ALPHABET_DICT, 
+  vietnameseAlphabet, 
+  vietnameseAlphabetData, 
+  getLetterData 
+};
 
 // ==========================================
 // 1. TIẾNG VIỆT:
 // Bảng 29 chữ cái chuẩn duy nhất (A Ă Â B C D Đ E Ê G H I K L M N O Ô Ơ P Q R S T U Ư V X Y)
-// Mỗi chữ cái là 1 thẻ duy nhất (không trùng lặp), hỗ trợ cả Chữ thường và Chữ hoa
-// & 8 Dấu thanh / Dấu mũ tiếng Việt
+// Chuẩn hóa Sư phạm Tiểu học với đầy đủ 29 chữ cái (thường và hoa) & nét bút
 // ==========================================
 
-export const VIETNAMESE_LETTERS: CharacterItem[] = [
+export const VIETNAMESE_LETTERS: CharacterItem[] = VIETNAMESE_29_LETTERS;
+
+// Legacy placeholder export kept for backward compatibility if needed
+export const OLD_VIETNAMESE_LETTERS: CharacterItem[] = [
   {
     id: 'vi_A',
     char: 'Aa',
@@ -36,8 +53,11 @@ export const VIETNAMESE_LETTERS: CharacterItem[] = [
     language: 'vi',
     category: 'letters',
     strokesCount: 3,
-    upperStrokesCount: 4,
+    upperStrokesCount: 3,
     lowerStrokesCount: 3,
+    strokes: CHARACTER_STROKE_DATA['ă'],
+    upperStrokes: CHARACTER_STROKE_DATA['Ă'],
+    lowerStrokes: CHARACTER_STROKE_DATA['ă'],
     tips: 'Thân chữ a/A kết hợp dấu trăng khuyết (˘) cong lõm lên trên cân đối.',
     gridType: 'oly_vi',
     examples: ['ăn', 'măng', 'tắm', 'Ăn học']
@@ -933,3 +953,59 @@ export function getAlphabetData(lang: LanguageCode): {
       return { categories: [], items: [] };
   }
 }
+
+// ==========================================
+// Comprehensive character dictionary lookup
+// Guarantees key indexing for: alphabetData[selectedLetter] || alphabetData['ă']
+// ==========================================
+export const alphabetData: Record<string, CharacterItem> = {};
+
+function indexItem(item: CharacterItem) {
+  if (!item) return;
+  alphabetData[item.id] = item;
+  alphabetData[item.char] = item;
+  alphabetData[item.char.normalize('NFC')] = item;
+  alphabetData[item.char.normalize('NFD')] = item;
+  if (item.upperChar) {
+    alphabetData[item.upperChar] = item;
+    alphabetData[item.upperChar.normalize('NFC')] = item;
+    alphabetData[item.upperChar.normalize('NFD')] = item;
+  }
+  if (item.lowerChar) {
+    alphabetData[item.lowerChar] = item;
+    alphabetData[item.lowerChar.normalize('NFC')] = item;
+    alphabetData[item.lowerChar.normalize('NFD')] = item;
+  }
+}
+
+VIETNAMESE_LETTERS.forEach((item) => {
+  indexItem(item);
+  // Also index with legacy 'vi_' prefix for backwards compatibility
+  alphabetData[`vi_${item.id}`] = item;
+  if (item.id === 'ă') {
+    alphabetData['vi_AW'] = item;
+  }
+  if (item.id === 'â') {
+    alphabetData['vi_AA'] = item;
+  }
+  if (item.id === 'đ') {
+    alphabetData['vi_DD'] = item;
+  }
+  if (item.id === 'ê') {
+    alphabetData['vi_EE'] = item;
+  }
+  if (item.id === 'ô') {
+    alphabetData['vi_OO'] = item;
+  }
+  if (item.id === 'ơ') {
+    alphabetData['vi_OW'] = item;
+  }
+  if (item.id === 'ư') {
+    alphabetData['vi_UW'] = item;
+  }
+});
+VIETNAMESE_ACCENTS.forEach(indexItem);
+ENGLISH_LETTERS.forEach(indexItem);
+JAPANESE_HIRAGANA_FLAT.forEach(indexItem);
+JAPANESE_KATAKANA_FLAT.forEach(indexItem);
+

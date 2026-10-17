@@ -146,8 +146,14 @@ export default function App() {
 
   // Action handlers
   const handleLaunchARForCharacter = (char: CharacterItem) => {
+    let targetText = char.char;
+    if (char.lowerChar && (targetText.length > 1 || targetText === `${char.upperChar}${char.lowerChar}`)) {
+      targetText = char.lowerChar;
+    }
+    targetText = (targetText || char.lowerChar || char.char || '').normalize('NFC');
+
     setActivePracticeItem({
-      text: char.char,
+      text: targetText,
       language: char.language,
       reading: char.reading || char.name,
       translation: char.vietnameseMeaning,
@@ -160,8 +166,14 @@ export default function App() {
   };
 
   const handleLaunchCanvasForCharacter = (char: CharacterItem) => {
+    let targetText = char.char;
+    if (char.lowerChar && (targetText.length > 1 || targetText === `${char.upperChar}${char.lowerChar}`)) {
+      targetText = char.lowerChar;
+    }
+    targetText = (targetText || char.lowerChar || char.char || '').normalize('NFC');
+
     setActivePracticeItem({
-      text: char.char,
+      text: targetText,
       language: char.language,
       reading: char.reading || char.name,
       translation: char.vietnameseMeaning,
