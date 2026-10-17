@@ -84,7 +84,11 @@ export interface StrokeEvaluationResult {
   precision: number;
   recall: number;
   shapeSimilarity?: number; // 0 - 100 (%) Độ tương đồng hình dáng nội dung
-  isShapeMatch?: boolean;   // true nếu độ tương đồng >= 40%
+  isShapeMatch?: boolean;   // true nếu độ tương đồng >= 45% và không sai chữ
+  isWrongCharacter?: boolean;
+  detectedCharacter?: string;
+  targetCharacter?: string;
+  wrongCharacterMessage?: string;
   totalInkPoints: number;
   pointsInSafeZone: number;
   centerlineCoverage: number;
@@ -833,19 +837,130 @@ export function sampleTemplateTo100Waypoints(
  *      => TUYỆT ĐỐI KHÔNG ĐƯỢC CHO 70 ĐIỂM!
  *      => Nhận xét rõ: "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu".
  */
+export interface InkTopology {
+  uMinX: number;
+  uMaxX: number;
+  uMinY: number;
+  uMaxY: number;
+  boxWidth: number;
+  boxHeight: number;
+  aspectRatio: number;
+  hasTallLeftStem: boolean;
+  hasSeparateTopDiacritic: boolean;
+  hasTwoRightLobes: boolean;
+  topBandRatio: number;
+  midBandRatio: number;
+  bottomBandRatio: number;
+  leftColRatio: number;
+  rightColRatio: number;
+}
+
+export function extractInkTopology(
+  userPoints: Array<{ x: number; y: number }>,
+  _width: number,
+  _height: number
+): InkTopology {
+  let uMinX = Infinity, uMaxX = -Infinity, uMinY = Infinity, uMaxY = -Infinity;
+  for (const pt of userPoints) {
+    if (pt.x < uMinX) uMinX = pt.x;
+    if (pt.x > uMaxX) uMaxX = pt.x;
+    if (pt.y < uMinY) uMinY = pt.y;
+    if (pt.y > uMaxY) uMaxY = pt.y;
+  }
+  const boxWidth = Math.max(1, uMaxX - uMinX);
+  const boxHeight = Math.max(1, uMaxY - uMinY);
+  const aspectRatio = boxWidth / boxHeight;
+
+  const vSlices = new Uint16Array(10);
+  const hSlices = new Uint16Array(10);
+  const grid10 = new Uint16Array(100);
+
+  const total = Math.max(1, userPoints.length);
+  let topCount = 0;
+  let midCount = 0;
+  let bottomCount = 0;
+  let leftCount = 0;
+  let rightCount = 0;
+
+  for (const pt of userPoints) {
+    const ny = Math.max(0, Math.min(0.999, (pt.y - uMinY) / boxHeight));
+    const nx = Math.max(0, Math.min(0.999, (pt.x - uMinX) / boxWidth));
+
+    const vy = Math.floor(ny * 10);
+    const hx = Math.floor(nx * 10);
+
+    vSlices[vy]++;
+    hSlices[hx]++;
+    grid10[vy * 10 + hx]++;
+
+    if (ny < 0.35) topCount++;
+    else if (ny < 0.70) midCount++;
+    else bottomCount++;
+
+    if (nx < 0.45) leftCount++;
+    else rightCount++;
+  }
+
+  // 1. Kiểm tra thân đứng thẳng bên trái (hasTallLeftStem):
+  // Cột trái (hx từ 1 đến 3) có mực trải dài qua ít nhất 6 trong 8 lát cắt vy từ 1 đến 8
+  let leftSlicesCovered = 0;
+  for (let vy = 1; vy <= 8; vy++) {
+    const rowLeft = grid10[vy * 10 + 1] + grid10[vy * 10 + 2] + grid10[vy * 10 + 3];
+    if (rowLeft > total * 0.015) {
+      leftSlicesCovered++;
+    }
+  }
+  const hasTallLeftStem = leftSlicesCovered >= 6 && (leftCount / total) > 0.30;
+
+  // 2. Kiểm tra nét dấu phụ riêng biệt trên đỉnh (dấu trăng khuyết của Ă/ă hoặc dấu nón):
+  const topInk = vSlices[0] + vSlices[1];
+  const gapInk = vSlices[2];
+  const bodyInk = total - topInk - gapInk;
+  const hasSeparateTopDiacritic = (topInk > total * 0.04) && (gapInk < total * 0.06 || gapInk < topInk * 0.65) && (bodyInk > total * 0.35);
+
+  // 3. Kiểm tra 2 bụng cong phình sang phải (đặc trưng của chữ B / b):
+  const upperRight = grid10[25] + grid10[26] + grid10[27] + grid10[35] + grid10[36] + grid10[37] + grid10[45] + grid10[46] + grid10[47];
+  const waistRight = grid10[55] + grid10[56] + grid10[57];
+  const lowerRight = grid10[65] + grid10[66] + grid10[67] + grid10[75] + grid10[76] + grid10[77] + grid10[85] + grid10[86] + grid10[87];
+  const hasTwoRightLobes = upperRight > total * 0.06 && lowerRight > total * 0.08 && (waistRight <= (upperRight + lowerRight) * 0.45);
+
+  return {
+    uMinX,
+    uMaxX,
+    uMinY,
+    uMaxY,
+    boxWidth,
+    boxHeight,
+    aspectRatio,
+    hasTallLeftStem,
+    hasSeparateTopDiacritic,
+    hasTwoRightLobes,
+    topBandRatio: topCount / total,
+    midBandRatio: midCount / total,
+    bottomBandRatio: bottomCount / total,
+    leftColRatio: leftCount / total,
+    rightColRatio: rightCount / total,
+  };
+}
+
 export function computeShapeAndCharacterSimilarity(
   alignedUserPoints: Array<{ x: number; y: number }>,
   waypoints100: Array<{ x: number; y: number; index: number; strokeId?: number }>,
   width: number,
   height: number,
-  toleranceR: number
+  toleranceR: number,
+  targetChar?: string
 ): {
   similarity: number;          // 0 - 100 (%)
   iou: number;                 // 0.0 - 1.0
   chamferSim: number;          // 0.0 - 1.0
   minStrokeCoverage: number;   // 0.0 - 1.0
   strokeCoverages: number[];
-  isMatch: boolean;            // true if similarity >= 40%
+  isMatch: boolean;            // true if similarity >= 45% và không sai chữ
+  isWrongCharacter?: boolean;
+  detectedCharacter?: string;
+  targetCharacter?: string;
+  wrongCharacterMessage?: string;
   failureReason?: string;
 } {
   if (!alignedUserPoints || alignedUserPoints.length === 0 || !waypoints100 || waypoints100.length === 0) {
@@ -902,7 +1017,6 @@ export function computeShapeAndCharacterSimilarity(
   const userGrid = new Uint8Array(GRID_SIZE * GRID_SIZE);
   const tmplGrid = new Uint8Array(GRID_SIZE * GRID_SIZE);
 
-  // Điền template vào grid (kèm vùng đệm lân cận bán kính 1 cell)
   for (const wp of waypoints100) {
     const gx = Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((wp.x / width) * GRID_SIZE)));
     const gy = Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((wp.y / height) * GRID_SIZE)));
@@ -917,14 +1031,12 @@ export function computeShapeAndCharacterSimilarity(
     }
   }
 
-  // Điền user ink vào grid
   for (const up of alignedUserPoints) {
     const gx = Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((up.x / width) * GRID_SIZE)));
     const gy = Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((up.y / height) * GRID_SIZE)));
     userGrid[gy * GRID_SIZE + gx] = 1;
   }
 
-  // Tính IoU giữa User Grid và Template Grid
   let intersectionCount = 0;
   let unionCount = 0;
   const totalCells = GRID_SIZE * GRID_SIZE;
@@ -936,15 +1048,14 @@ export function computeShapeAndCharacterSimilarity(
   }
   const iou = unionCount > 0 ? (intersectionCount / unionCount) : 0;
 
-  // 3. Khoảng cách Chamfer 2 chiều (Bidirectional Chamfer Distance)
-  // Lấy mẫu con tối đa 50 điểm để tính nhanh trong 0.2ms
-  const userStep = Math.max(1, Math.floor(alignedUserPoints.length / 50));
+  // 3. Khoảng cách Chamfer 2 chiều
+  const userStep = Math.max(1, Math.floor(alignedUserPoints.length / 45));
   const userSamples: Array<{ x: number; y: number }> = [];
   for (let i = 0; i < alignedUserPoints.length; i += userStep) {
     userSamples.push(alignedUserPoints[i]);
   }
 
-  const tmplStep = Math.max(1, Math.floor(waypoints100.length / 50));
+  const tmplStep = Math.max(1, Math.floor(waypoints100.length / 45));
   const tmplSamples: Array<{ x: number; y: number }> = [];
   for (let i = 0; i < waypoints100.length; i += tmplStep) {
     tmplSamples.push(waypoints100[i]);
@@ -975,29 +1086,81 @@ export function computeShapeAndCharacterSimilarity(
   const meanChamferDist = (avgDistUserToTmpl + avgDistTmplToUser) / 2;
   const chamferSim = Math.max(0, Math.min(1, 1 - meanChamferDist / 38));
 
-  // 4. Tổng hợp độ tương đồng hình dáng nội dung (0 - 100%)
-  // Tỷ trọng: 40% IoU ma trận không gian, 35% khoảng cách Chamfer, 25% độ bám nét cấu trúc
+  // 4. Tổng hợp độ tương đồng hình dáng ban đầu
   const strokeScore = numStrokes > 1 ? minStrokeCoverage : (intersectionCount / Math.max(1, unionCount));
   let rawSimilarity = 0.40 * iou + 0.35 * chamferSim + 0.25 * strokeScore;
   let similarity = Math.round(rawSimilarity * 100);
 
-  // ANTI-WRONG-CHARACTER GUARDS:
-  // Trường hợp 1: Chữ nhiều nét nhưng thiếu hẳn một nét chính (ví dụ: mẫu chữ 'a' nhưng chỉ viết hình tròn 'o')
-  // Nét móc ngược có minStrokeCoverage < 20% => BẮT BUỘC bóp điểm tương đồng xuống dưới 30%!
+  // 5. PHÂN TÍCH ĐẶC TRƯNG HÌNH HỌC VÀ NHẬN DẠNG KÝ TỰ (CHARACTER CLASSIFICATION / TOPOLOGY CHECK)
+  const topo = extractInkTopology(alignedUserPoints, width, height);
+
+  const cleanTarget = (targetChar || 'a').trim().normalize('NFC');
+  const upperTarget = cleanTarget.toUpperCase();
+  const lowerTarget = cleanTarget.toLowerCase();
+
+  let isWrongCharacter = false;
+  let detectedChar: string | undefined = undefined;
+
+  // Q-CHECK ĐẶC BIỆT: YÊU CẦU CHỮ "Ă" / "ă" NHƯNG NGƯỜI DÙNG VIẾT CHỮ "B" / "b" HOẶC CHỮ KHÁC
+  if (upperTarget === 'Ă') {
+    // Chữ "Ă": BẮT BUỘC có thân chữ a (cong kín hoặc móc) và một nét dấu trăng khuyết phía trên đỉnh.
+    // Chữ "B": Có thân đứng thẳng và 2 bụng cong phình sang phải, KHÔNG có dấu trăng khuyết trên đỉnh.
+    if (topo.hasTallLeftStem) {
+      // Phát hiện thân đứng cao đặc trưng của 'B' / 'b' / 'l' / 'd'
+      isWrongCharacter = true;
+      detectedChar = topo.hasTwoRightLobes ? 'B' : 'B';
+    } else if (topo.hasTwoRightLobes) {
+      isWrongCharacter = true;
+      detectedChar = 'B';
+    } else if (!topo.hasSeparateTopDiacritic && topo.topBandRatio < 0.05) {
+      // Hoàn toàn không có dấu trăng khuyết trên đỉnh: chỉ viết chữ 'o' hoặc 'c' hoặc 'a' thiếu dấu
+      isWrongCharacter = true;
+      detectedChar = topo.leftColRatio > 0.6 ? 'C' : 'O';
+    } else if (similarity < 45) {
+      isWrongCharacter = true;
+      detectedChar = 'B';
+    }
+  } else if (upperTarget === 'B') {
+    // Yêu cầu chữ 'B' nhưng không có thân đứng thẳng hoặc không có bụng cong
+    if (!topo.hasTallLeftStem && !topo.hasTwoRightLobes && similarity < 45) {
+      isWrongCharacter = true;
+      detectedChar = topo.hasSeparateTopDiacritic ? 'Ă' : 'O';
+    }
+  } else {
+    // Các chữ cái khác: kiểm tra nếu độ tương đồng hình học dưới 45%
+    if (similarity < 45) {
+      isWrongCharacter = true;
+      if (topo.hasTallLeftStem && topo.hasTwoRightLobes) {
+        detectedChar = 'B';
+      } else if (topo.hasSeparateTopDiacritic) {
+        detectedChar = 'Ă';
+      } else if (topo.leftColRatio > 0.6 && topo.rightColRatio < 0.4) {
+        detectedChar = 'C';
+      } else {
+        detectedChar = 'Khác';
+      }
+    }
+  }
+
+  // Trường hợp thiếu nét chính trong chữ nhiều nét
   if (numStrokes > 1 && minStrokeCoverage < 0.20) {
-    similarity = Math.min(similarity, 28);
+    similarity = Math.min(similarity, 22);
+    isWrongCharacter = true;
+    if (!detectedChar) detectedChar = 'Chưa đủ nét';
   }
 
-  // Trường hợp 2: Viết chữ khác hẳn (ví dụ: mẫu 'a' nhưng vẽ chữ 'z', 'm' hoặc nguệch ngoạc)
-  // IoU thấp (< 0.22) hoặc khoảng cách Chamfer xa (> 25px)
-  if (iou < 0.22 || chamferSim < 0.30) {
-    similarity = Math.min(similarity, 26);
+  // Nếu bị phát hiện SAI KÝ TỰ:
+  let wrongCharacterMessage: string | undefined = undefined;
+  if (isWrongCharacter) {
+    const targetDisplay = upperTarget;
+    const finalDetected = detectedChar || 'B';
+    wrongCharacterMessage = `❌ SAI KÝ TỰ! Đề bài yêu cầu viết chữ [${targetDisplay}], bạn đang viết sang chữ khác [${finalDetected}]. Hãy nhìn kỹ mẫu chữ và viết lại.`;
+    // LẬP TỨC ĐÁNH RỚT: Điểm tương đồng bị bóp xuống < 20%
+    similarity = Math.min(18, Math.round(similarity * 0.35));
   }
 
-  const isMatch = similarity >= 40;
-  const failureReason = isMatch 
-    ? undefined 
-    : "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu";
+  const isMatch = !isWrongCharacter && similarity >= 45;
+  const failureReason = wrongCharacterMessage || (isMatch ? undefined : "Phát hiện viết sai chữ cái hoặc sai cấu trúc nét nghiêm trọng so với chữ mẫu");
 
   return {
     similarity,
@@ -1006,6 +1169,10 @@ export function computeShapeAndCharacterSimilarity(
     minStrokeCoverage,
     strokeCoverages,
     isMatch,
+    isWrongCharacter,
+    detectedCharacter: detectedChar,
+    targetCharacter: upperTarget,
+    wrongCharacterMessage,
     failureReason,
   };
 }

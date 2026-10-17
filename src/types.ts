@@ -159,6 +159,10 @@ export interface HandwritingFeedback {
   strengths: string[];
   improvements: string[];
   encouragement?: string;
+  isWrongCharacter?: boolean;
+  detectedCharacter?: string;
+  targetCharacter?: string;
+  wrongCharacterMessage?: string;
   strictEvaluation?: StrictHandwritingEvaluation;
 }
 

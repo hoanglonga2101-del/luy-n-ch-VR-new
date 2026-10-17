@@ -138,6 +138,24 @@ export const STROKES_S_UPPER: StrokePath[] = [
   }
 ];
 
+// Vietnamese K (upper) - QĐ 31/2002/QĐ-BGDĐT: Nét 1 móc ngược trái thân đứng; Nét 2 móc hai đầu thắt giữa xoắn sát thân nét 1 rồi móc ngược phải
+export const STROKES_K_UPPER: StrokePath[] = [
+  {
+    id: 1,
+    d: 'M 36 28 C 30 28 29 34 29 42 L 29 72 C 29 78 23 80 20 74',
+    label: 'Nét 1: Nét cong lượn kết hợp nét móc ngược trái (thân chữ K hoa cao 2.5 ô ly)',
+    startPoint: { x: 36, y: 28 },
+    direction: 'vertical'
+  },
+  {
+    id: 2,
+    d: 'M 68 28 C 58 32 46 44 38 52 C 33 50 33 46 37 46 C 42 46 44 51 40 56 C 46 64 56 76 64 78 C 70 80 74 76 74 66',
+    label: 'Nét 2: Nét móc hai đầu thắt giữa: từ đỉnh lượn xuống tạo vòng xoắn thắt nhỏ sát thân nét 1 rồi lượn chéo xuống dòng 1 móc ngược lên',
+    startPoint: { x: 68, y: 28 },
+    direction: 'curve'
+  }
+];
+
 // Pre-defined detailed stroke order paths for key representative characters in each script
 // Coordinates normalized to 100x100 box
 export const CHARACTER_STROKE_DATA: Record<string, StrokePath[]> = {
@@ -154,6 +172,8 @@ export const CHARACTER_STROKE_DATA: Record<string, StrokePath[]> = {
   's': STROKES_S_LOWER,
   'S': STROKES_S_UPPER,
   'Ss': STROKES_S_LOWER,
+  'K': STROKES_K_UPPER,
+  'Kk': STROKES_K_UPPER,
 
   // Chinese Basic Strokes (Vĩnh Tự Bát Pháp)
   '一': [

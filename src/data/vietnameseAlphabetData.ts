@@ -467,22 +467,21 @@ export const VIETNAMESE_29_LETTERS: VietnameseLetterData[] = [
     category: 'letters',
     totalStrokes: 2,
     strokesCount: 2,
-    upperStrokesCount: 3,
+    upperStrokesCount: 2,
     lowerStrokesCount: 2,
     tips: 'Nét khuyết trên cao 2.5 ô ly nối nét thắt giữa ở lưng chừng ô thứ hai.',
-    upperTips: 'Chữ K hoa gồm 3 nét: Nét 1 là thân đứng uốn lượn; Nét 2 là nét móc xiên trên thắt nhỏ ở giữa thân; Nét 3 là nét móc ngược phải chéo xuống dòng 1.',
+    upperTips: 'Chữ K hoa cao 2.5 ô ly gồm 2 nét chính: Nét 1 là nét cong lượn kết hợp nét móc ngược trái (thân chữ K hoa). Nét 2 là nét móc hai đầu thắt giữa: từ đỉnh lượn xuống tạo vòng xoắn thắt nhỏ sát thân nét 1 rồi kéo chéo xuống dòng 1 móc ngược lên sang phải.',
     examples: ['kem', 'kéo', 'kính', 'Kiên trì'],
     audioInstruction: 'Nét 1: Viết nét khuyết trên cao 2.5 ô ly. Nét 2: Rê bút lên dòng 3 viết nét móc thắt giữa rồi uốn móc ngược sang phải.',
-    upperAudioInstruction: 'Nét 1: Viết thân đứng uốn lượn. Nét 2: Viết nét xiên trên uốn thắt nhỏ ở giữa thân. Nét 3: Viết nét móc ngược phải chéo xuống dòng 1.',
+    upperAudioInstruction: 'Nét 1: Đặt bút trên đỉnh cao 2.5 ô ly, lượn cong sang trái kéo thẳng xuống dòng 1 uốn móc nhẹ sang trái. Nét 2: Đặt bút bên phải nét 1 lượn cong xuống giữa thân tạo vòng xoắn thắt nhỏ sát thân nét 1, kéo lượn chéo xuống dòng 1 rồi uốn móc ngược lên.',
     gridType: 'oly_vi',
     lowerStrokes: [
       { id: 1, d: 'M 34 60 C 40 45 46 28 46 20 C 46 14 38 14 34 22 L 34 80', label: 'Nét 1: Nét khuyết trên', startPoint: { x: 34, y: 60 }, direction: 'vertical' },
       { id: 2, d: 'M 34 54 C 42 42 56 42 56 50 C 56 56 46 56 46 58 C 48 64 56 72 64 78 C 66 80 70 80 74 74', label: 'Nét 2: Nét móc thắt giữa', startPoint: { x: 34, y: 54 }, direction: 'curve' }
     ],
     upperStrokes: [
-      { id: 1, d: 'M 34 30 C 30 30 28 34 28 42 L 28 76 C 28 80 24 80 22 74', label: 'Nét 1: Nét móc ngược trái thân đứng', startPoint: { x: 34, y: 30 }, direction: 'vertical' },
-      { id: 2, d: 'M 66 30 C 64 30 50 40 44 50 C 42 52 44 54 46 54', label: 'Nét 2: Nét móc xiên trên uốn thắt nhỏ ở giữa thân', startPoint: { x: 66, y: 30 }, direction: 'curve' },
-      { id: 3, d: 'M 46 54 C 52 62 62 74 68 78 C 72 80 76 80 78 74', label: 'Nét 3: Nét móc ngược phải từ thắt giữa kéo xuống dòng 1', startPoint: { x: 46, y: 54 }, direction: 'curve' }
+      { id: 1, d: 'M 36 28 C 30 28 29 34 29 42 L 29 72 C 29 78 23 80 20 74', label: 'Nét 1: Nét cong lượn kết hợp nét móc ngược trái (thân chữ K hoa cao 2.5 ô ly)', startPoint: { x: 36, y: 28 }, direction: 'vertical' },
+      { id: 2, d: 'M 68 28 C 58 32 46 44 38 52 C 33 50 33 46 37 46 C 42 46 44 51 40 56 C 46 64 56 76 64 78 C 70 80 74 76 74 66', label: 'Nét 2: Nét móc hai đầu thắt giữa: từ đỉnh lượn xuống tạo vòng xoắn thắt nhỏ sát thân nét 1 rồi lượn chéo xuống dòng 1 móc ngược lên', startPoint: { x: 68, y: 28 }, direction: 'curve' }
     ],
     strokes: [
       { id: 1, d: 'M 34 60 C 40 45 46 28 46 20 C 46 14 38 14 34 22 L 34 80', label: 'Nét 1: Nét khuyết trên', startPoint: { x: 34, y: 60 }, direction: 'vertical' },
